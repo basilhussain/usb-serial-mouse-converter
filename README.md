@@ -127,9 +127,9 @@ The 3-way jumper labelled `USB-PWR` is only used for facilitating firmware upgra
 
 ## Hardware
 
-For schematic and PCB layout, see the `Hardware` sub-folder. For information about constructing your own board, see the README therein.
+For schematic, PCB layout, and Bill of Materials (BOM), see the `Hardware` sub-folder.
 
-Gerber files for PCB manufacturing, Bill of Materials (BOM) for component parts, and 3D STEP file for sheet-metal mounting bracket can all be found in the 'Releases' section of the GitHub repository.
+Gerber files for PCB manufacturing and 3D STEP file for sheet-metal mounting bracket can all be found in the 'Releases' section of the GitHub repository.
 
 ## Firmware
 
