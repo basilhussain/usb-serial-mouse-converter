@@ -41,10 +41,8 @@ Designed to be mounted with a bracket internally in a regular PC expansion card 
 **You will require a male-to-female 9-pin DE-9 RS-232 serial cable.**
 
 1. Connect one end of the cable to the 9-pin port on the adapter.
-2. Connect the other end of the cable to a free 9-pin serial port on the host machine. Effectively, you are looping the serial cable from the machine back to itself.
-
-> [!NOTE]
-> Remember which host serial port is used, as you may need to specify to a mouse driver which port the mouse is on.
+2. Connect the other end of the cable to a free 9-pin serial port on the host machine. Effectively, you're looping the serial cable from the machine back to itself.
+3. Set port selection DIP switch to 'External' (see *Configuration* section below).
 
 ### Internal Serial Cable
 
@@ -57,6 +55,7 @@ The internal serial connection is designed to connect to an internal pin header 
 
 1. Connect one end of the cable to the adapter's pin header labelled `RS232-INT`. Note the arrow indicating pin 1, which should align with the red stripe on the cable.
 2. Connect the other end of the cable to the host machine's internal RS232 port header. Again, ensure the red stripe is aligned to pin 1. Be aware that pin 1 markings on motherboards and expansion cards may vary, so if not immediately apparent, inspect closely.
+3. Set port selection DIP switch to 'Internal' (see *Configuration* section below).
 
 If in doubt about host machine's serial header location, orientation, or exact pin-out, refer to your motherboard or serial expansion card's documentation.
 
@@ -68,7 +67,7 @@ If in doubt about host machine's serial header location, orientation, or exact p
 Serial mouse emulation type, Plug-and-Play ID, and external/internal serial port selection are configured via DIP switches.
 
 > [!IMPORTANT]
-> With the exception of the port selection switch, if you change any of the switches while the system is running, you will need to either unload and re-load the mouse driver or restart the system for changes to take effect.
+> If you change any of the switches (except the port selection switch) while the system is running, you will need to either unload and re-load the mouse driver or restart the system for changes to take effect.
 
 Numeric column headings in the tables below correspond to the labels on the DIP switch, and the off/on values in each row are what each individual switch should be set to.
 
@@ -133,63 +132,9 @@ Gerber files for PCB manufacturing and 3D STEP file for sheet-metal mounting bra
 
 ## Firmware
 
-The firmware runs on an embedded RISC-V microcontroller that serves as a USB host and handles enumeration of the HID USB pointing device and reception of its regular reports. These reports are translated into the appropriate serial protocol format and sent via RS-232 serial UART to the host system. When the host system probes the serial port (by toggling the RTS line), the firmware also responds with identifying information.
+For firmware source files, firmware update procedure, and build procedure, see the `Firmware` sub-folder.
 
-The firmware code is written entirely in C. See the `Firmware` sub-folder for source files.
-
-### Update Procedure
-
-The firmware of the on-board microcontroller can be upgraded via the USB port. You can find the latest firmware in the 'Releases' section of the GitHub repository.
-
-#### Pre-requisites
-
-* Type-A male to Type-A male USB cable.
-* A Windows computer with a USB port and [WCH ISP Tool software](https://www.wch-ic.com/downloads/WCHISPTool_Setup_exe.html) downloaded and installed.
-
-#### Procedure
-
-1. Unplug cables from **all** connectors on the board – USB, serial, and power.
-2. Set the jumper labelled `USB-PWR` to position 2-3.
-3. Connect one end of A-to-A USB cable to the computer being used to run the update software.
-4. Start the WCH ISP Tool software.
-5. While holding down the `BOOT` button, plug other end of the USB cable into the board's USB connector.
-6. After a couple of seconds, release the `BOOT` button.
-7. The microcontroller should automatically be detected. The *Chip Option* panel should show series `CH32X03x`, model `CH32X035G8R6`, and port `USB`.
-8. In the *Download File* panel, click the folder icon in the first row of the table (*Object File1*) and select the `.hex` firmware file. Ensure the checkbox in the right-hand column is ticked, and that all other rows are blank.
-9. Click the *Download* button at the bottom of the window.
-10. Wait for the firmware download process to occur. It should go through three stages: erasing, programming, and verifying, which should all report as completing successfully.
-11. Unplug the USB cable.
-12. Return `USB-PWR` jumper to position 1-2.
-13. Reconnect USB mouse, serial, and power cables as they were before.
-
-### Building Firmware
-
-A Windows build environment with installations of the [xPack GCC RISC-V compiler](https://xpack-dev-tools.github.io/riscv-none-elf-gcc-xpack/) and [xPack Windows Build Tools](https://xpack-dev-tools.github.io/windows-build-tools-xpack/) is assumed. It may be possible to build on other platforms with the appropriate RISC-V cross-compiler (riscv-none-elf-gcc) and tools (make, objcopy, etc.) but this has not been provided for or tested.
-
-#### Compiling
-
-1. Run the `setenv-prompt.bat` batch file. This will open a command prompt with the appropriate paths set for xPack tools.
-2. From the command prompt, run `make` to compile.
-3. Firmware files in both ELF (`.elf`) and Intel Hex format (`.hex`) will be placed in a `bin` sub-folder.
-
-> [!NOTE]
-> You may need to edit the `setenv-prompt.bat` batch file and alter the exact paths due to package release or version number differences.
-
-To remove all build artifacts (binaries, object files, etc.) in the `bin` and `obj` folders, run `make clean`.
-
-#### Programming
-
-The easiest procedure for programming the firmware on a newly-built board is to follow the procedure for USB firmware updates above.
-
-Alternatively, if you have a copy of WCH's fork of OpenOCD installed (e.g. from MounRiver Studio) and in path, plus a WCH LinkE programming adapter connected to the `DEBUG` header, you can run `make flash` to program.
-
-#### Debugging
-
-The firmware can optionally be configured to output various informational and diagnostic messages to a dedicated UART pin, labelled `TX`, present on the board's `DEBUG` header.
-
-When compiling, give an argument of `DEBUG_VERBOSITY=<value>` to the `make` command, where 'value' is one of the following: `ERROR`, `WARN`, `INFO`, `TRACE`. The least verbose is `ERROR` and `TRACE` the most. To turn off all debug messages entirely, specify the value `OFF`.
-
-The debug UART operates at a baud rate of 256 kbit, with 8 data bits, 1 stop bit, no parity.
+You can find the latest compiled firmware in the 'Releases' section of the GitHub repository.
 
 ## Motivation
 
@@ -223,7 +168,7 @@ However, when it comes to serial mice, their update rate is limited by the rate 
 
 This disparity between update rates causes many projects to implement some kind of aggregation scheme, where they will collect multiple more-frequent USB reports and sum the pointer movement between serial updates.
 
-But what if I told you that is wholly unnecessary? You see, that `bInterval` value mentioned earlier is a *minimum* update rate; it's the *fastest* interval at which the USB device should be polled. There's actually nothing stopping you from polling a USB mouse at a *slower* rate! So you can simply match your USB polling rate to the fastest rate at which you can send serial updates, and the mouse just does all the aggregation for you!
+But what if I told you that is wholly unnecessary? You see, that `bInterval` value mentioned earlier is a *minimum* interval time; it's the *fastest* rate at which the USB device should be polled. There's actually nothing stopping you from polling a USB mouse at a *slower* rate! So you can simply match your USB polling rate to the fastest rate at which you can send serial updates, and the mouse just does all the aggregation for you!
 
 ### Identity Problems
 
