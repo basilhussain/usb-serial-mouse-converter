@@ -996,9 +996,7 @@ static bool usb_find_hid_boot_mouse_intf(const usb_context_t * const ctx, uint8_
 }
 
 static bool usb_hid_report_descriptor_is_mouse(usb_hid_mouse_inputs_t *inputs) {
-	const hid_collection_t *app_collection = NULL;
-	const hid_collection_t *phys_collection = NULL;
-	const hid_collection_t *logic_collection = NULL;
+	const hid_collection_t *app_collection;
 	const hid_input_t *input;
 	
 	if(inputs == NULL) return false;
@@ -1017,60 +1015,60 @@ static bool usb_hid_report_descriptor_is_mouse(usb_hid_mouse_inputs_t *inputs) {
 		return false;
 	}
 	
-	// Look for first-level Application collection with usage page of Generic
-	// Desktop Ctrls and usage of Mouse.
-	app_collection = hid_find_child_collection(inputs->composition.collection_root, false, 0, HID_COLLECTION_TYPE_APPLICATION, HID_USAGE_PAGE_GENERIC_DESKTOP, HID_USAGE_MOUSE);	
+	// Sanity-check we actually have some inputs to search through.
+	if(inputs->composition.input_storage_count == 0) {
+		debug_error("zero inputs in composition");
+		return false;
+	}
+
+	// Perform a general check for a top-level Application Collection with Mouse
+	// Usage and Generic Desktop Controls Usage Page.
+	app_collection = hid_find_child_collection(inputs->composition.collection_root, HID_COLLECTION_TYPE_APPLICATION, HID_USAGE_PAGE_GENERIC_DESKTOP, HID_USAGE_MOUSE);
 	
 	if(app_collection == NULL) {
-		debug_warn("no qualifying application collection found");
+		debug_warn("no qualifying top-level application collection found");
 		return false;
 	} else {
-		debug_trace("found top application collection %p", app_collection);
+		debug_trace("top mouse application collection %p qualifies", app_collection);
 	}
 	
-	// Recursively look for lower-level Physical collection that is a descendent
-	// of the top-level Application collection that has usage page of Generic
-	// Desktop Ctrls and usage of Pointer.
-	phys_collection = hid_find_child_collection(app_collection, true, 8, HID_COLLECTION_TYPE_PHYSICAL, HID_USAGE_PAGE_GENERIC_DESKTOP, HID_USAGE_POINTER);
+	// Our general strategy is to do a bottom-up search, finding the relevant
+	// inputs first (by iterating over composition->input_storage), then
+	// traversing the containing Collection hierarchy upwards to verify that
+	// the input is located within a Collection that has an appropriate Usage
+	// Page and Usage.
 	
-	if(phys_collection == NULL) {
-		debug_warn("no qualifying physical collection found");
-		return false;
-	} else {
-		debug_trace("found descendent physical collection %p", phys_collection);
-	}
-	
-	// Wheel input might be in a Logical collection that is a child of the
-	// Physical collection.
-	logic_collection = hid_find_child_collection(phys_collection, false, 0, HID_COLLECTION_TYPE_LOGICAL, HID_USAGE_PAGE_GENERIC_DESKTOP, HID_USAGE_UNDEFINED);
-
-	if(logic_collection != NULL) {
-		debug_trace("found child logical collection %p", logic_collection);
-	}
-	
-	// Check that EITHER the Application or Physical collection contains inputs
-	// that represent at least buttons 1 & 2, optionally 3. Some mice put the
-	// buttons outside the Physical collection; some put them inside. Not sure
-	// which is technically correct (maybe both are!), so accomodate either.
-	const hid_collection_t *btns_search_colls[] = { app_collection, phys_collection };
-	for(size_t i = 0; i < (sizeof(btns_search_colls) / sizeof(btns_search_colls[0])); i++) {
-		input = btns_search_colls[i]->first_input;
-		while(input != NULL) {
-			if(
-				input->usage_page == HID_USAGE_PAGE_BUTTON &&
-				input->report_count >= 1 && input->report_size == 1 &&
-				input->logical_min == 0 && input->logical_max == 1 &&
-				input->flags.is_data && input->flags.is_variable && input->flags.is_absolute &&
-				input->flags.is_non_wrap && input->flags.is_linear && input->flags.is_pref_state &&
-				input->flags.is_no_null_pos && input->flags.is_bits
-			) {
-				if(hid_input_has_usage(input, HID_USAGE_BTN_1)) inputs->button_1.hid_input = input;
-				if(hid_input_has_usage(input, HID_USAGE_BTN_2)) inputs->button_2.hid_input = input;
-				if(hid_input_has_usage(input, HID_USAGE_BTN_3)) inputs->button_3.hid_input = input;
-			}
-			input = input->next_sibling;
+	// Search for Button 1, Button 2, and Button 3 inputs. Check that each is
+	// contained within a Physical, or failing that, an Application collection.
+	// Some mice put the buttons outside the Physical collection; most put them
+	// inside. The latter is likely technically correct, but accomodate either.
+	for(size_t i = 0; i < inputs->composition.input_storage_count && i < HID_INPUT_STORAGE_MAX; i++) {
+		input = &inputs->composition.input_storage[i];
+		
+		if(
+			input->usage_page == HID_USAGE_PAGE_BUTTON &&
+			input->report_count >= 1 && input->report_size == 1 &&
+			input->logical_min == 0 && input->logical_max == 1 &&
+			input->flags.is_data && input->flags.is_variable && input->flags.is_absolute &&
+			input->flags.is_non_wrap && input->flags.is_linear && input->flags.is_pref_state &&
+			input->flags.is_no_null_pos && input->flags.is_bits &&
+			hid_input_is_contained_by_collection(input, app_collection) &&
+			(
+				hid_find_containing_collection(input, HID_COLLECTION_TYPE_PHYSICAL, HID_USAGE_PAGE_GENERIC_DESKTOP, HID_USAGE_POINTER) != NULL ||
+				hid_find_containing_collection(input, HID_COLLECTION_TYPE_APPLICATION, HID_USAGE_PAGE_GENERIC_DESKTOP, HID_USAGE_MOUSE) != NULL
+			)
+		) {
+			debug_trace("found candidate button input %p", input);
+			if(hid_input_has_usage(input, HID_USAGE_BTN_1)) inputs->button_1.hid_input = input;
+			if(hid_input_has_usage(input, HID_USAGE_BTN_2)) inputs->button_2.hid_input = input;
+			if(hid_input_has_usage(input, HID_USAGE_BTN_3)) inputs->button_3.hid_input = input;
 		}
-		// TODO: do we really want to always search both collections, even if we already found all buttons?
+		
+		// Don't keep searching if we've got all three buttons. For 2-button
+		// devices, means we'll keep searching all remaining inputs once we've
+		// found the 2 buttons, but they're a rarity so don't care about such
+		// inefficiency.
+		if(inputs->button_1.hid_input != NULL && inputs->button_2.hid_input != NULL && inputs->button_3.hid_input != NULL) break;
 	}
 	
 	if(inputs->button_1.hid_input == NULL) {
@@ -1078,7 +1076,7 @@ static bool usb_hid_report_descriptor_is_mouse(usb_hid_mouse_inputs_t *inputs) {
 		return false;
 	} else {
 		inputs->button_1.bit_offset = hid_input_usage_bit_offset(inputs->button_1.hid_input, HID_USAGE_BTN_1);
-		debug_trace("found button 1, input = %p, bit_offset = %zu", inputs->button_1.hid_input, inputs->button_1.bit_offset);
+		debug_trace("button 1 input %p qualifies, bit_offset = %zu", inputs->button_1.hid_input, inputs->button_1.bit_offset);
 	}
 	
 	if(inputs->button_2.hid_input == NULL) {
@@ -1086,7 +1084,7 @@ static bool usb_hid_report_descriptor_is_mouse(usb_hid_mouse_inputs_t *inputs) {
 		return false;
 	} else {
 		inputs->button_2.bit_offset = hid_input_usage_bit_offset(inputs->button_2.hid_input, HID_USAGE_BTN_2);
-		debug_trace("found button 2, input = %p, bit_offset = %zu", inputs->button_2.hid_input, inputs->button_2.bit_offset);
+		debug_trace("button 2 input %p qualifies, bit_offset = %zu", inputs->button_2.hid_input, inputs->button_2.bit_offset);
 	}
 	
 	if(inputs->button_3.hid_input == NULL) {
@@ -1094,26 +1092,31 @@ static bool usb_hid_report_descriptor_is_mouse(usb_hid_mouse_inputs_t *inputs) {
 		// Optional, so we don't quit here.
 	} else {
 		inputs->button_3.bit_offset = hid_input_usage_bit_offset(inputs->button_3.hid_input, HID_USAGE_BTN_3);
-		debug_trace("found button 3, input = %p, bit_offset = %zu", inputs->button_3.hid_input, inputs->button_3.bit_offset);
+		debug_trace("button 3 input %p qualifies, bit_offset = %zu", inputs->button_3.hid_input, inputs->button_3.bit_offset);
 	}
 	
-	// Check that the Physical collection contains inputs representing X and Y
-	// axes, and optionally Wheel.
-	input = phys_collection->first_input;
-	while(input != NULL) {
+	// Search for inputs representing X and Y axes, contained within a Physical
+	// collection.
+	for(size_t i = 0; i < inputs->composition.input_storage_count && i < HID_INPUT_STORAGE_MAX; i++) {
+		input = &inputs->composition.input_storage[i];
+		
 		if(
 			input->usage_page == HID_USAGE_PAGE_GENERIC_DESKTOP &&
 			input->report_count >= 1 && input->report_size >= 8 &&
 			input->logical_min <= -127 && input->logical_max >= 127 &&
 			input->flags.is_data && input->flags.is_variable && input->flags.is_relative &&
 			input->flags.is_non_wrap && input->flags.is_linear && input->flags.is_pref_state &&
-			input->flags.is_no_null_pos && input->flags.is_bits
+			input->flags.is_no_null_pos && input->flags.is_bits &&
+			hid_input_is_contained_by_collection(input, app_collection) &&
+			hid_find_containing_collection(input, HID_COLLECTION_TYPE_PHYSICAL, HID_USAGE_PAGE_GENERIC_DESKTOP, HID_USAGE_POINTER) != NULL
 		) {
+			debug_trace("found candidate axis input %p", input);
 			if(hid_input_has_usage(input, HID_USAGE_X)) inputs->x_axis.hid_input = input;
 			if(hid_input_has_usage(input, HID_USAGE_Y)) inputs->y_axis.hid_input = input;
 		}
-		input = input->next_sibling;
-		// TODO: do we really want to continue searching even if we already found all inputs?
+		
+		// Don't keep searching if we've got both axes.
+		if(inputs->x_axis.hid_input != NULL && inputs->y_axis.hid_input != NULL) break;
 	}
 	
 	if(inputs->x_axis.hid_input == NULL) {
@@ -1121,7 +1124,7 @@ static bool usb_hid_report_descriptor_is_mouse(usb_hid_mouse_inputs_t *inputs) {
 		return false;
 	} else {
 		inputs->x_axis.bit_offset = hid_input_usage_bit_offset(inputs->x_axis.hid_input, HID_USAGE_X);
-		debug_trace("found x-axis, input = %p, bit_offset = %zu", inputs->x_axis.hid_input, inputs->x_axis.bit_offset);
+		debug_trace("x-axis input %p qualifies, bit_offset = %zu", inputs->x_axis.hid_input, inputs->x_axis.bit_offset);
 	}
 	
 	if(inputs->y_axis.hid_input == NULL) {
@@ -1129,32 +1132,35 @@ static bool usb_hid_report_descriptor_is_mouse(usb_hid_mouse_inputs_t *inputs) {
 		return false;
 	} else {
 		inputs->y_axis.bit_offset = hid_input_usage_bit_offset(inputs->y_axis.hid_input, HID_USAGE_Y);
-		debug_trace("found y-axis, input = %p, bit_offset = %zu", inputs->y_axis.hid_input, inputs->y_axis.bit_offset);
+		debug_trace("y-axis input %p qualifies, bit_offset = %zu", inputs->y_axis.hid_input, inputs->y_axis.bit_offset);
 	}
-	
-	// Look for optional Wheel input. Might be in Physical collection, or maybe
-	// a Logical collection inside the Physical collection (typically paired
-	// with a Resolution Multiplier feature).
-	const hid_collection_t *wheel_search_colls[] = { phys_collection, logic_collection };
-	for(size_t i = 0; i < (sizeof(wheel_search_colls) / sizeof(wheel_search_colls[0])); i++) {
-		if(wheel_search_colls[i] != NULL) {
-			input = wheel_search_colls[i]->first_input;
-			while(input != NULL) {
-				if(
-					input->usage_page == HID_USAGE_PAGE_GENERIC_DESKTOP &&
-					hid_input_has_usage(input, HID_USAGE_WHEEL) &&
-					input->report_count >= 1 && input->report_size >= 8 &&
-					input->logical_min <= -127 && input->logical_max >= 127 &&
-					input->flags.is_data && input->flags.is_variable && input->flags.is_relative &&
-					input->flags.is_non_wrap && input->flags.is_linear && input->flags.is_pref_state &&
-					input->flags.is_no_null_pos && input->flags.is_bits
-				) {
-					inputs->wheel.hid_input = input;
-				}
-				input = input->next_sibling;
-				// TODO: do we really want to continue searching even if we already found input?
-			}
+
+	// Search for optional Wheel input. Should be in Physical collection. May be
+	// in a Logical collection inside the Physical collection - typically
+	// paired with a Resolution Multiplier feature - but that's irrelevant. Some
+	// mice erroneously include the Wheel input in a second sibling Physical
+	// collection that doesn't have a Usage, so we won't check for an associated
+	// Pointer Usage to accommodate that.
+	for(size_t i = 0; i < inputs->composition.input_storage_count && i < HID_INPUT_STORAGE_MAX; i++) {
+		input = &inputs->composition.input_storage[i];
+		
+		if(
+			input->usage_page == HID_USAGE_PAGE_GENERIC_DESKTOP &&
+			hid_input_has_usage(input, HID_USAGE_WHEEL) &&
+			input->report_count >= 1 && input->report_size >= 8 &&
+			input->logical_min <= -127 && input->logical_max >= 127 &&
+			input->flags.is_data && input->flags.is_variable && input->flags.is_relative &&
+			input->flags.is_non_wrap && input->flags.is_linear && input->flags.is_pref_state &&
+			input->flags.is_no_null_pos && input->flags.is_bits &&
+			hid_input_is_contained_by_collection(input, app_collection) &&
+			hid_find_containing_collection(input, HID_COLLECTION_TYPE_PHYSICAL, HID_USAGE_PAGE_GENERIC_DESKTOP, HID_USAGE_UNDEFINED) != NULL
+		) {
+			debug_trace("found candidate wheel input %p", input);
+			inputs->wheel.hid_input = input;
 		}
+		
+		// Don't keep searching if we already got wheel.
+		if(inputs->wheel.hid_input != NULL) break;
 	}
 
 	if(inputs->wheel.hid_input == NULL) {
@@ -1162,9 +1168,9 @@ static bool usb_hid_report_descriptor_is_mouse(usb_hid_mouse_inputs_t *inputs) {
 		// Optional, so we don't quit here.
 	} else {
 		inputs->wheel.bit_offset = hid_input_usage_bit_offset(inputs->wheel.hid_input, HID_USAGE_WHEEL);
-		debug_trace("found wheel, input = %p, bit_offset = %zu", inputs->wheel.hid_input, inputs->wheel.bit_offset);
+		debug_trace("wheel input %p qualifies, bit_offset = %zu", inputs->wheel.hid_input, inputs->wheel.bit_offset);
 	}
-	
+
 	return true;
 }
 

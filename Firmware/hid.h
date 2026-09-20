@@ -105,11 +105,16 @@ typedef struct {
 	bool is_bytes : 1;
 } hid_input_flags_t;
 
+// Forward struct declarations to allow each to have member pointers to the other.
+struct hid_input;
+struct hid_collection;
+
 typedef struct hid_input {
 	// NOTE: Members here are ordered to minimise size of struct.
 	uint16_t usages[HID_INPUT_USAGES_MAX];
 	size_t usages_count;
 	size_t bit_offset;
+	struct hid_collection *collection;
 	// TODO: add prev_sibling?
 	struct hid_input *next_sibling;
 	int32_t logical_min;
@@ -151,7 +156,9 @@ typedef struct {
 
 extern bool hid_parse_report_descriptor(const uint8_t *descr, const size_t descr_len, hid_report_composition_t *composition);
 extern void hid_dump_report_composition(const hid_report_composition_t *composition);
-extern const hid_collection_t* hid_find_child_collection(const hid_collection_t *parent, const bool recursive, const uint8_t max_depth, const uint8_t type, const uint16_t usage_page, const uint16_t usage);
+extern const hid_collection_t* hid_find_child_collection(const hid_collection_t *parent, const uint8_t type, const uint16_t usage_page, const uint16_t usage);
+extern const hid_collection_t* hid_find_containing_collection(const hid_input_t *input, const uint8_t type, const uint16_t usage_page, const uint16_t usage);
+extern bool hid_input_is_contained_by_collection(const hid_input_t *input, const hid_collection_t *ancestor);
 extern bool hid_input_has_usage(const hid_input_t *input, const uint16_t usage);
 extern size_t hid_input_usage_bit_offset(const hid_input_t *input, const uint16_t usage);
 extern uint32_t hid_read_report_value_unsigned(const uint8_t *report, const size_t report_len, const uint32_t bit_offset, const uint8_t bit_size);

@@ -321,6 +321,7 @@ static void hid_dump_collection(const hid_collection_t *c, const size_t depth) {
 			
 			debug_info("%s  %zu.%zu.%zu. INPUT %p:", indent, depth, coll_idx, input_idx, input);
 			debug_info("%s  " TREE_MID " bit_offset = %zu", indent, input->bit_offset);
+			debug_info("%s  " TREE_MID " collection = %p", indent, input->collection);
 			debug_info("%s  " TREE_MID " next_sibling = %p", indent, input->next_sibling);
 			debug_info("%s  " TREE_MID " usage_page = 0x%04X", indent, input->usage_page);
 			debug_info("%s  " TREE_MID " usages_count = %zu", indent, input->usages_count);
@@ -378,6 +379,7 @@ static bool hid_parse_main_input(hid_parse_context_t *ctx, const hid_item_t *ite
 	
 	// Copy into it all the pertinent global, locals, and other data. Also read
 	// the flags from item and set those too.
+	input->collection = ctx->collection_current;
 	input->flags = hid_read_input_flags(hid_read_unsigned_le(item->data, item->data_size));
 	input->usage_page = ctx->globals.usage_page;
 	input->usage_min = ctx->locals.usage_min;
@@ -755,11 +757,9 @@ void hid_dump_report_composition(const hid_report_composition_t *composition) {
 	}
 }
 
-// TODO: way to make this implementation not use recursion?
-const hid_collection_t* hid_find_child_collection(const hid_collection_t *parent, const bool recursive, const uint8_t max_depth, const uint8_t type, const uint16_t usage_page, const uint16_t usage) {
+const hid_collection_t* hid_find_child_collection(const hid_collection_t *parent, const uint8_t type, const uint16_t usage_page, const uint16_t usage) {
 	const hid_collection_t *result = NULL;
 	
-	// Iterate over the given parent collection's children.
 	const hid_collection_t *c = parent->first_child;
 	while(c != NULL) {
 		// Look for a child collection that has the given type, usage page (or
@@ -773,17 +773,50 @@ const hid_collection_t* hid_find_child_collection(const hid_collection_t *parent
 			result = c;
 			break;
 		}
-		// If we're performing a recursive search, also search this child's
-		// child collections (if any), and so on up the tree. This is a
-		// depth-first search.
-		if(recursive && max_depth > 0 && c->child_count > 0) {
-			result = hid_find_child_collection(c, recursive, max_depth - 1, type, usage_page, usage);
-			if(result != NULL) break;
-		}
+		
 		c = c->next_sibling;
 	}
 	
 	return result;
+}
+
+const hid_collection_t* hid_find_containing_collection(const hid_input_t *input, const uint8_t type, const uint16_t usage_page, const uint16_t usage) {
+	const hid_collection_t *result = NULL;
+	
+	const hid_collection_t *c = input->collection;
+	while(c != NULL && !c->is_root) {
+		// Look for a collection that has the given type, usage page (or any
+		// usage page if we've been given 'undefined'), and usage (or any if
+		// given 'undefined' for that too).
+		if(
+			c->type == type &&
+			(usage_page == HID_USAGE_PAGE_UNDEFINED || c->usage_page == usage_page) &&
+			(usage == HID_USAGE_UNDEFINED || c->usage == usage)
+		) {
+			result = c;
+			break;
+		}
+		
+		// Nothing found, continue search with parent collection.
+		c = c->parent;
+	}
+
+	return result;
+}
+
+bool hid_input_is_contained_by_collection(const hid_input_t *input, const hid_collection_t *ancestor) {
+	const hid_collection_t *c = input->collection;
+	while(c != NULL && !c->is_root) {
+		// Do we have matching ancestor collection? If not, continue search with
+		// parent collection.
+		if(c == ancestor) {
+			return true;
+		} else {
+			c = c->parent;
+		}
+	}
+	
+	return false;
 }
 
 bool hid_input_has_usage(const hid_input_t *input, const uint16_t usage) {
